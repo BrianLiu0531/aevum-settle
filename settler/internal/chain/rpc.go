@@ -31,6 +31,10 @@ type RPCConfig struct {
 	Timeout     time.Duration // per attempt
 	// ZkEVM reads finality from the zkevm_* namespace instead of the safe/finalized block tags.
 	ZkEVM bool
+	// LocalVirtualDepth and LocalVerifiedDepth simulate the zkEVM assurance levels on a local dev
+	// chain (where safe and finalized equal latest): a block counts as virtual or verified once it
+	// is that many blocks deep. Ignored when ZkEVM is set.
+	LocalVirtualDepth, LocalVerifiedDepth uint64
 }
 
 type endpoint struct {
@@ -49,6 +53,7 @@ type RPC struct {
 	log       *slog.Logger
 	batchSize int // max requests per JSON-RPC batch; providers rate-limit each batch element
 	zkevm     bool
+	simDepth  [2]uint64 // virtual, verified
 
 	mu          sync.Mutex
 	batchBlocks map[uint64]uint64 // batch number -> its last block number (immutable once virtual)
@@ -67,6 +72,7 @@ func DialRPC(ctx context.Context, cfg RPCConfig, log *slog.Logger) (*RPC, error)
 		timeout:     cfg.Timeout,
 		log:         log,
 		zkevm:       cfg.ZkEVM,
+		simDepth:    [2]uint64{cfg.LocalVirtualDepth, cfg.LocalVerifiedDepth},
 		batchBlocks: map[uint64]uint64{},
 	}
 	c.batchSize = min(headerBatchSize, c.limiter.Burst())
@@ -189,7 +195,10 @@ func (c *RPC) Tips(ctx context.Context) (Tips, error) {
 		if err != nil {
 			return Tips{}, err
 		}
-		return Tips{Latest: hs[0].Number, Virtual: hs[1].Number, Finalized: hs[2].Number}, nil
+		t := Tips{Latest: hs[0].Number, Virtual: hs[1].Number, Finalized: hs[2].Number}
+		t.Finalized = min(t.Finalized, t.Latest-min(t.Latest, c.simDepth[1]))
+		t.Virtual = max(t.Finalized, min(t.Virtual, t.Latest-min(t.Latest, c.simDepth[0])))
+		return t, nil
 	}
 	// The finalized tag is the last block of the last verified batch. The virtual height is not
 	// exposed as a tag, so it is derived from the last virtual batch.

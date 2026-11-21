@@ -1,3 +1,6 @@
+# QDay testnet stack. Fill in .env first (see .env.example), then:
+#   docker compose up -d              settler + Postgres      http://localhost:8080
+#   docker compose --profile demo up  + the demo merchant     http://localhost:8787
 services:
   db:
     image: postgres:16-alpine
@@ -25,6 +28,19 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    restart: unless-stopped
+
+  merchant:
+    profiles: ["demo"]
+    build: ./demo
+    env_file: .env
+    environment:
+      SETTLER_URL: http://settler:8080
+      MERCHANT_PORT: "8787"
+    ports:
+      - "8787:8787"
+    depends_on:
+      - settler
     restart: unless-stopped
 
 volumes:

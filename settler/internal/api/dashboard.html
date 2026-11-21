@@ -1,1 +1,181 @@
-<!doctype html><title>settler</title>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Aevum Settle</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --ink:#15171a; --muted:#646b75; --line:#e3e6ea; --ok:#11803d; --warn:#a86200; --bad:#b42318; --accent:#3346d3;
+          --t1:#a86200; --t2:#3346d3; --t3:#11803d; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#111317; --card:#1a1d23; --ink:#e8eaed; --muted:#9aa1ab; --line:#2b3038; --ok:#4cc27a; --warn:#e0a23a; --bad:#f0726a; --accent:#8c9bff;
+          --t1:#e0a23a; --t2:#8c9bff; --t3:#4cc27a; } }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; background:var(--bg); color:var(--ink); }
+  main { max-width: 1120px; margin: 0 auto; padding: 20px 16px 48px; }
+  header { display:flex; flex-wrap:wrap; gap:8px 20px; align-items:baseline; justify-content:space-between; }
+  h1 { font-size: 22px; margin: 0; } h2 { font-size: 16px; margin: 0 0 12px; }
+  nav a { margin-left: 14px; }
+  a { color: var(--accent); } .muted { color: var(--muted); }
+  code, .mono { font-family: ui-monospace, Consolas, monospace; font-size: 13px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px; margin-top:16px; }
+  .tiers { display:grid; gap:12px; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+  .tier { border-left: 4px solid var(--c); padding: 4px 0 4px 12px; }
+  .tier .n { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .tier .label { font-weight: 600; color: var(--c); }
+  .kpis { display:flex; flex-wrap:wrap; gap: 8px 28px; margin-top: 12px; }
+  .kpis b { font-variant-numeric: tabular-nums; }
+  table { width:100%; border-collapse: collapse; }
+  th, td { text-align:left; padding:8px 6px; border-bottom:1px solid var(--line); vertical-align: top; white-space: nowrap; }
+  th { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); font-weight: 600; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .scroll { overflow-x: auto; }
+  .steps { display:inline-flex; gap:3px; vertical-align: middle; }
+  .steps i { width: 18px; height: 6px; border-radius: 3px; background: var(--line); }
+  .steps i.on1 { background: var(--t1); } .steps i.on2 { background: var(--t2); } .steps i.on3 { background: var(--t3); }
+  .pill { display:inline-block; padding:0 8px; border-radius:99px; font-size:12px; border:1px solid currentColor; }
+  .ok { color: var(--ok); } .warn { color: var(--warn); } .bad { color: var(--bad); }
+  button { font: inherit; padding: 4px 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--card); color: var(--ink); cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  input { font: inherit; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); min-width: 0; }
+  form.row { display:flex; flex-wrap:wrap; gap:8px; } form.row input { flex: 1 1 220px; }
+  pre { background: var(--bg); border:1px solid var(--line); border-radius:8px; padding: 10px; overflow:auto; font-size: 12px; margin: 10px 0 0; }
+  #evidence { display:none; }
+  .grid2 { display:grid; gap:16px; grid-template-columns: 1fr; } @media (min-width: 900px) { .grid2 { grid-template-columns: 1fr 1fr; } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div><h1>Aevum Settle</h1><div class="muted">Payment confirmation for AI agents paying in tUSD8 · <span id="net"></span></div></div>
+    <nav><a href="/console">Owner console</a><a href="/v1/status">API</a><a href="/metrics">Metrics</a></nav>
+  </header>
+
+  <section class="card">
+    <h2>Assurance on this chain</h2>
+    <div class="tiers">
+      <div class="tier" style="--c:var(--t1)"><div class="label">trusted</div><div class="n" id="h-trusted">–</div><div class="muted">in a sequencer block · ~1 s</div></div>
+      <div class="tier" style="--c:var(--t2)"><div class="label">virtual</div><div class="n" id="h-virtual">–</div><div class="muted">batch sequenced on L1 · <span id="d-virtual">~10 min</span></div></div>
+      <div class="tier" style="--c:var(--t3)"><div class="label">verified</div><div class="n" id="h-verified">–</div><div class="muted">validity proof verified on L1 · <span id="d-verified">~90 min</span></div></div>
+    </div>
+    <div class="kpis">
+      <span>Policy <code id="policy">–</code></span>
+      <span>Indexed <b id="indexed">–</b> <span class="muted" id="lag"></span></span>
+      <span>Payments <b id="t-count">0</b></span><span>Confirmed <b id="t-conf">0</b></span><span>Verified <b id="t-ver">0</b></span>
+      <span>Reorged away <b id="t-orph">0</b></span><span>Volume <b id="t-vol">0</b> tUSD8</span>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Payments</h2>
+    <div class="scroll"><table>
+      <thead><tr><th>Time</th><th>Invoice</th><th class="num">tUSD8</th><th>Paid by</th><th>Merchant</th><th>Assurance</th><th>Policy needs</th><th>Deliver?</th><th>Transaction</th><th></th></tr></thead>
+      <tbody id="payments"><tr><td colspan="10" class="muted">No payments indexed yet.</td></tr></tbody>
+    </table></div>
+    <div id="evidence"><h2 style="margin-top:16px">L1 evidence for block <span id="ev-block"></span></h2><pre id="ev-body"></pre></div>
+  </section>
+
+  <div class="grid2">
+    <section class="card">
+      <h2>Is this invoice paid?</h2>
+      <form class="row" id="inv-form">
+        <input id="inv-merchant" placeholder="merchant 0x…" required>
+        <input id="inv-id" placeholder="invoice id (INV-… or 0x…)" required>
+        <button>Check</button>
+      </form>
+      <pre id="inv-out" style="display:none"></pre>
+    </section>
+    <section class="card">
+      <h2>Webhook deliveries</h2>
+      <div class="scroll"><table>
+        <thead><tr><th>Event</th><th>Invoice</th><th>Delivered</th><th class="num">Tries</th></tr></thead>
+        <tbody id="events"><tr><td colspan="4" class="muted">No events yet.</td></tr></tbody>
+      </table></div>
+    </section>
+  </div>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const short = (h, a = 6, b = 4) => h ? `${h.slice(0, a + 2)}…${h.slice(-b)}` : "";
+const LEVEL = { trusted: 1, virtual: 2, verified: 3 };
+let status = null;
+
+function steps(level, required) {
+  const n = LEVEL[level] || 0;
+  return `<span class="steps" title="${esc(level)}">${[1, 2, 3].map((i) => `<i class="${i <= n ? "on" + i : ""}"></i>`).join("")}</span> ${esc(level)}`;
+}
+function ago(t) {
+  const s = Math.max(0, (Date.now() - Date.parse(t)) / 1000);
+  return s < 60 ? `${s.toFixed(0)}s ago` : s < 3600 ? `${(s / 60).toFixed(0)}m ago` : new Date(t).toLocaleString();
+}
+function addr(a) {
+  if (!a) return "";
+  return status?.explorer ? `<a class="mono" href="${esc(status.explorer)}/address/${esc(a)}" target="_blank" rel="noopener">${short(a, 4, 4)}</a>` : `<span class="mono">${short(a, 4, 4)}</span>`;
+}
+
+async function refresh() {
+  try {
+    status = await (await fetch("/v1/status")).json();
+    $("net").textContent = `${status.network} (chain ${status.chainId}) · router ${status.router}`;
+    $("h-trusted").textContent = status.trustedBlock.toLocaleString();
+    $("h-virtual").textContent = status.virtualBlock.toLocaleString();
+    $("h-verified").textContent = status.verifiedBlock.toLocaleString();
+    $("d-virtual").textContent = `${(status.trustedBlock - status.virtualBlock).toLocaleString()} blocks behind`;
+    $("d-verified").textContent = `${(status.trustedBlock - status.verifiedBlock).toLocaleString()} blocks behind`;
+    $("policy").textContent = status.policy;
+    $("indexed").textContent = status.indexedBlock.toLocaleString();
+    $("lag").textContent = status.lagBlocks ? `(${status.lagBlocks} behind)` : "(at tip)";
+    const t = status.totals;
+    $("t-count").textContent = t.payments; $("t-conf").textContent = t.confirmed; $("t-ver").textContent = t.verified;
+    $("t-orph").textContent = t.orphaned; $("t-vol").textContent = t.volume.display;
+
+    const { payments } = await (await fetch("/v1/payments?limit=50")).json();
+    if (payments.length) $("payments").innerHTML = payments.map((p) => `<tr>
+      <td title="${esc(p.blockTime)}">${esc(ago(p.blockTime))}</td>
+      <td class="mono" title="${esc(p.invoiceId)}">${short(p.invoiceId)}</td>
+      <td class="num">${esc(p.amount.display)}</td>
+      <td>${p.agent ? `agent ${addr(p.agent)}<div class="muted">for ${addr(p.payer)}</div>` : addr(p.payer)}</td>
+      <td>${addr(p.merchant)}</td>
+      <td>${steps(p.assurance)}</td>
+      <td>${esc(p.required)}</td>
+      <td>${p.confirmed ? `<span class="pill ok">yes</span>` : `<span class="pill warn">wait</span>`}</td>
+      <td class="mono">${p.explorerUrl ? `<a href="${esc(p.explorerUrl)}" target="_blank" rel="noopener">${short(p.txHash)}</a>` : short(p.txHash)}<div class="muted">block ${p.blockNumber}</div></td>
+      <td><button data-block="${p.blockNumber}">L1 proof</button></td></tr>`).join("");
+
+    const { events } = await (await fetch("/v1/events?limit=20")).json();
+    if (events.length) $("events").innerHTML = events.map((e) => `<tr>
+      <td>${esc(e.type)}</td><td class="mono">${short(e.body.invoiceId)}</td>
+      <td>${e.deliveredAt ? `<span class="ok">${esc(ago(e.deliveredAt))}</span>` : `<span class="${e.lastError ? "bad" : "warn"}" title="${esc(e.lastError)}">${e.lastError ? "failing" : "queued"}</span>`}</td>
+      <td class="num">${e.attempts}</td></tr>`).join("");
+  } catch (err) {
+    $("net").textContent = "settler unreachable";
+  }
+}
+
+$("payments").addEventListener("click", async (ev) => {
+  const b = ev.target.closest("button[data-block]");
+  if (!b) return;
+  $("evidence").style.display = "block";
+  $("ev-block").textContent = b.dataset.block;
+  $("ev-body").textContent = "loading…";
+  const res = await fetch(`/v1/evidence/${b.dataset.block}`);
+  const body = await res.json();
+  $("ev-body").textContent = res.ok
+    ? JSON.stringify(body, null, 2) + (body.l1VerifyTx ? "\n\n✓ proven on L1: final" : body.l1SequenceTx ? "\n\n… sequenced on L1, proof pending" : "\n\n… not yet on L1")
+    : body.error;
+  $("evidence").scrollIntoView({ behavior: "smooth", block: "nearest" });
+});
+
+$("inv-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const out = $("inv-out");
+  out.style.display = "block";
+  const res = await fetch(`/v1/invoices/${encodeURIComponent($("inv-merchant").value.trim())}/${encodeURIComponent($("inv-id").value.trim())}`);
+  out.textContent = JSON.stringify(await res.json(), null, 2);
+});
+
+refresh();
+setInterval(refresh, 2000);
+</script>
+</body>
+</html>

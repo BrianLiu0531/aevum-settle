@@ -1,0 +1,18 @@
+{
+  "name": "aevum-settle-demo",
+  "private": true,
+  "description": "Agent SDK + CLI, and a demo merchant (HTTP 402 paywall + signed webhook receiver) for aevum-settle",
+  "license": "MIT",
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "bin": { "aevum-agent": "./agent.js" },
+  "exports": { ".": "./sdk/index.js" },
+  "scripts": {
+    "merchant": "node merchant.js",
+    "agent": "node agent.js",
+    "test": "node --test \"test/*.test.js\""
+  },
+  "dependencies": {
+    "ethers": "^6.13.4"
+  }
+}

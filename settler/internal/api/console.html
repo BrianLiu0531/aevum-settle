@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Owner console · Aevum Settle</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --ink:#15171a; --muted:#646b75; --line:#e3e6ea; --ok:#11803d; --warn:#a86200; --bad:#b42318; --accent:#3346d3; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#111317; --card:#1a1d23; --ink:#e8eaed; --muted:#9aa1ab; --line:#2b3038; --ok:#4cc27a; --warn:#e0a23a; --bad:#f0726a; --accent:#8c9bff; } }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; background:var(--bg); color:var(--ink); }
+  main { max-width: 860px; margin: 0 auto; padding: 20px 16px 48px; }
+  header { display:flex; flex-wrap:wrap; gap:8px 20px; align-items:baseline; justify-content:space-between; }
+  h1 { font-size: 22px; margin: 0; } h2 { font-size: 16px; margin: 0 0 6px; }
+  a { color: var(--accent); } .muted { color: var(--muted); } .ok { color: var(--ok); } .bad { color: var(--bad); } .warn { color: var(--warn); }
+  code, .mono { font-family: ui-monospace, Consolas, monospace; font-size: 13px; word-break: break-all; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px; margin-top:16px; }
+  label { display:block; font-size: 13px; color: var(--muted); margin-top: 10px; }
+  input, textarea { width: 100%; font: inherit; padding: 8px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); }
+  textarea { min-height: 60px; font-family: ui-monospace, Consolas, monospace; font-size: 13px; }
+  .row { display:grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
+  button { font: inherit; padding: 8px 14px; border-radius: 6px; border: 1px solid var(--accent); background: var(--accent); color: #fff; cursor: pointer; margin-top: 12px; }
+  button.secondary { background: transparent; color: var(--accent); }
+  button.danger { background: var(--bad); border-color: var(--bad); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  dl { display:grid; grid-template-columns: max-content 1fr; gap: 4px 14px; margin: 8px 0 0; } dt { color: var(--muted); }
+  #log { list-style: none; padding: 0; margin: 0; } #log li { padding: 4px 0; border-bottom: 1px dashed var(--line); }
+  .note { border-left: 3px solid var(--warn); padding: 4px 10px; margin-top: 10px; font-size: 14px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div><h1>Owner console</h1><div class="muted">Give an AI agent a spending mandate in tUSD8, and take it away.</div></div>
+    <nav><a href="/">← Payments</a></nav>
+  </header>
+
+  <section class="card">
+    <h2>1 · Wallet</h2>
+    <div class="muted" id="net">Loading settler…</div>
+    <button id="connect">Connect wallet</button>
+    <dl id="wallet" hidden>
+      <dt>Owner</dt><dd class="mono" id="w-addr"></dd>
+      <dt>tUSD8</dt><dd id="w-bal"></dd>
+      <dt>Router allowance</dt><dd id="w-allow"></dd>
+    </dl>
+    <div class="note">Your tUSD8 never leaves your wallet until a payment: the router only moves it, under the
+      mandate's limits, straight to the merchant. The allowance is the ceiling of what the router may ever move.</div>
+  </section>
+
+  <section class="card">
+    <h2>2 · Allowance</h2>
+    <div class="muted">Let the router spend up to this much of your tUSD8 in total, across all agents.</div>
+    <div class="row"><div><label for="allow-amount">Amount (tUSD8)</label><input id="allow-amount" value="300" inputmode="decimal"></div></div>
+    <button class="needs-wallet" id="approve" disabled>Approve</button>
+  </section>
+
+  <section class="card">
+    <h2>3 · Grant a mandate</h2>
+    <div class="muted">Granting again replaces the agent's earlier mandate and resets today's spend.</div>
+    <label for="agent">Agent address (the agent's own key; it pays gas, never holds your funds)</label>
+    <input id="agent" class="mono" placeholder="0x…">
+    <div class="row">
+      <div><label for="per">Per-payment cap</label><input id="per" value="150" inputmode="decimal"></div>
+      <div><label for="daily">Daily cap</label><input id="daily" value="200" inputmode="decimal"></div>
+      <div><label for="days">Expires in (days)</label><input id="days" value="7" inputmode="numeric"></div>
+    </div>
+    <label for="merchants">Allowed merchants, one per line (empty = any merchant)</label>
+    <textarea id="merchants" placeholder="0x…"></textarea>
+    <button class="needs-wallet" id="grant" disabled>Grant mandate</button>
+  </section>
+
+  <section class="card">
+    <h2>4 · Inspect or revoke</h2>
+    <dl id="mandate"><dt>Status</dt><dd class="muted">Enter an agent address above.</dd></dl>
+    <button class="secondary" id="inspect">Refresh</button>
+    <button class="danger needs-wallet" id="revoke" disabled>Revoke now</button>
+  </section>
+
+  <section class="card">
+    <h2>Activity</h2>
+    <ul id="log" class="mono"></ul>
+  </section>
+</main>
+<script type="module">
+import { ethers } from "https://cdn.jsdelivr.net/npm/ethers@6.13.4/dist/ethers.min.js";
+
+const $ = (id) => document.getElementById(id);
+const ROUTER_ABI = [
+  "function token() view returns (address)",
+  "function mandate(address owner, address agent) view returns (tuple(uint128 perPaymentCap, uint128 dailyCap, uint128 remainingToday, uint64 expiresAt, bool active, bool merchantLocked))",
+  "function grantMandate(address agent, uint128 perPaymentCap, uint128 dailyCap, uint64 expiresAt, address[] merchants)",
+  "function revokeMandate(address agent)",
+  "error InvalidMandate()", "error NoMandate()", "error ZeroAddress()",
+];
+const TOKEN_ABI = ["function balanceOf(address) view returns (uint256)", "function allowance(address,address) view returns (uint256)", "function approve(address,uint256) returns (bool)"];
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const fmt = (v) => ethers.formatUnits(v, 6);
+const units = (s) => ethers.parseUnits(String(s).trim(), 6);
+
+let status, signer, owner, router, token;
+
+function log(html) {
+  const li = document.createElement("li");
+  li.innerHTML = `<span class="muted">${new Date().toLocaleTimeString()}</span> ${html}`;
+  $("log").prepend(li);
+}
+const txLink = (h) => (status.explorer ? `<a href="${status.explorer}/tx/${h}" target="_blank" rel="noopener">${h.slice(0, 12)}…</a>` : h);
+
+async function init() {
+  status = await (await fetch("/v1/status")).json();
+  $("net").innerHTML = `Network <b>${status.network}</b> (chain ${status.chainId}) · router <code>${status.router}</code>`;
+  if (!window.ethereum) {
+    $("connect").disabled = true;
+    $("connect").textContent = "No browser wallet found";
+  }
+}
+
+async function ensureChain() {
+  const want = "0x" + status.chainId.toString(16);
+  const have = await window.ethereum.request({ method: "eth_chainId" });
+  if (have === want) return;
+  try {
+    await window.ethereum.request({ method: "wallet_switchEthereumChain", params: [{ chainId: want }] });
+  } catch (e) {
+    if (e.code !== 4902 || !status.rpcUrl) throw e;
+    await window.ethereum.request({
+      method: "wallet_addEthereumChain",
+      params: [{ chainId: want, chainName: status.network === "qday-testnet" ? "QDay Testnet" : status.network,
+        nativeCurrency: { name: "tQDAY", symbol: "tQDAY", decimals: 18 }, rpcUrls: [status.rpcUrl],
+        blockExplorerUrls: status.explorer ? [status.explorer] : [] }],
+    });
+  }
+}
+
+async function refreshWallet() {
+  const [bal, allow] = await Promise.all([token.balanceOf(owner), token.allowance(owner, status.router)]);
+  $("w-addr").textContent = owner;
+  $("w-bal").textContent = fmt(bal);
+  $("w-allow").textContent = allow === ethers.MaxUint256 ? "unlimited" : fmt(allow);
+  $("wallet").hidden = false;
+}
+
+async function inspect() {
+  const agent = $("agent").value.trim();
+  if (!router || !ethers.isAddress(agent)) return;
+  const m = await router.mandate(owner, agent);
+  const dl = $("mandate");
+  if (m.expiresAt === 0n) {
+    dl.innerHTML = `<dt>Status</dt><dd class="bad">no mandate (never granted, or revoked)</dd>`;
+    return;
+  }
+  dl.innerHTML = `
+    <dt>Status</dt><dd class="${m.active ? "ok" : "bad"}">${m.active ? "active" : "expired"}</dd>
+    <dt>Per payment</dt><dd>${fmt(m.perPaymentCap)} tUSD8</dd>
+    <dt>Daily cap</dt><dd>${fmt(m.dailyCap)} tUSD8 (${fmt(m.remainingToday)} left today)</dd>
+    <dt>Expires</dt><dd>${new Date(Number(m.expiresAt) * 1000).toLocaleString()}</dd>
+    <dt>Merchants</dt><dd>${m.merchantLocked ? "allowlist only" : "any"}</dd>`;
+}
+
+async function send(label, fn) {
+  try {
+    await ensureChain();
+    const tx = await fn();
+    log(`${label}: sent ${txLink(tx.hash)}`);
+    const r = await tx.wait();
+    log(`<span class="ok">${label}: confirmed in block ${r.blockNumber}</span>`);
+    await Promise.all([refreshWallet(), inspect()]);
+  } catch (e) {
+    let parsed = null;
+    try { parsed = e.data && router.interface.parseError(e.data); } catch {}
+    log(`<span class="bad">${label} failed: ${parsed ? parsed.name : esc(e.shortMessage || e.message)}</span>`);
+  }
+}
+
+$("connect").onclick = async () => {
+  try {
+    await ensureChain();
+    const provider = new ethers.BrowserProvider(window.ethereum);
+    signer = await provider.getSigner();
+    owner = await signer.getAddress();
+    router = new ethers.Contract(status.router, ROUTER_ABI, signer);
+    token = new ethers.Contract(await router.token(), TOKEN_ABI, signer);
+    document.querySelectorAll(".needs-wallet").forEach((b) => (b.disabled = false));
+    $("connect").textContent = "Connected";
+    await refreshWallet();
+    log(`connected ${owner}`);
+  } catch (e) {
+    log(`<span class="bad">${e.shortMessage || e.message}</span>`);
+  }
+};
+
+$("approve").onclick = () => send("approve", () => token.approve(status.router, units($("allow-amount").value)));
+
+$("grant").onclick = () => {
+  const agent = $("agent").value.trim();
+  const merchants = $("merchants").value.split(/[\s,]+/).filter(Boolean);
+  const bad = [agent, ...merchants].find((a) => !ethers.isAddress(a));
+  if (bad !== undefined) return log(`<span class="bad">not an address: ${esc(bad) || "(agent is empty)"}</span>`);
+  const expires = Math.floor(Date.now() / 1000) + Math.round(Number($("days").value) * 86400);
+  return send("grant mandate", () => router.grantMandate(agent, units($("per").value), units($("daily").value), expires, merchants));
+};
+
+$("revoke").onclick = () => send("revoke", () => router.revokeMandate($("agent").value.trim()));
+$("inspect").onclick = () => inspect().catch((e) => log(`<span class="bad">${e.shortMessage || e.message}</span>`));
+$("agent").addEventListener("change", () => inspect().catch(() => {}));
+
+init();
+</script>
+</body>
+</html>

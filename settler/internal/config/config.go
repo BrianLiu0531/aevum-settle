@@ -35,6 +35,8 @@ type Config struct {
 	LogJSON             bool
 	WebhookURL          string
 	WebhookSecret       string
+	LocalVirtualDepth   uint64
+	LocalVerifiedDepth  uint64
 }
 
 // DefaultPolicy confirms up to 1 tUSD8 on the sequencer's word, up to 100 once the batch is on L1,
@@ -58,6 +60,8 @@ func FromEnv() (Config, error) {
 		LogJSON:             e.str("LOG_FORMAT", "json", false) == "json",
 		WebhookURL:          e.str("WEBHOOK_URL", "", false),
 		WebhookSecret:       e.str("WEBHOOK_SECRET", "", false),
+		LocalVirtualDepth:   e.uint("LOCAL_VIRTUAL_DEPTH", 0),
+		LocalVerifiedDepth:  e.uint("LOCAL_VERIFIED_DEPTH", 0),
 	}
 	if c.WebhookURL != "" && len(c.WebhookSecret) < 16 {
 		e.add(errors.New("WEBHOOK_SECRET must be at least 16 characters"))
@@ -89,6 +93,9 @@ func FromEnv() (Config, error) {
 	c.Policy = policy
 
 	e.add(c.LogLevel.UnmarshalText([]byte(e.str("LOG_LEVEL", "info", false))))
+	if c.LocalVerifiedDepth < c.LocalVirtualDepth {
+		e.add(errors.New("LOCAL_VERIFIED_DEPTH must be at least LOCAL_VIRTUAL_DEPTH"))
+	}
 	if c.MaxBlockRange == 0 || c.MaxUnfinalizedBatch == 0 {
 		e.add(errors.New("MAX_BLOCK_RANGE and MAX_UNFINALIZED_BATCH must be positive"))
 	}

@@ -22,6 +22,8 @@ type Network struct {
 	ChainID  uint64
 	Token    common.Address
 	Explorer string // base URL; tx pages are Explorer + "/tx/" + hash
+	// PublicRPC is offered to browser wallets by the owner console.
+	PublicRPC string
 	// ZkEVM means finality comes from the zkevm_* RPC namespace (virtual and verified batches).
 	// Otherwise the "safe" and "finalized" block tags are used.
 	ZkEVM bool
@@ -30,14 +32,15 @@ type Network struct {
 // Networks lists the supported chains.
 var Networks = map[string]Network{
 	"qday-testnet": {
-		Name:     "qday-testnet",
-		ChainID:  44005,
-		Token:    common.HexToAddress("0x456569838f1d43009A91ebA4263147Afd7233483"),
-		Explorer: "https://explorer-test.qday.info",
-		ZkEVM:    true,
+		Name:      "qday-testnet",
+		ChainID:   44005,
+		Token:     common.HexToAddress("0x456569838f1d43009A91ebA4263147Afd7233483"),
+		Explorer:  "https://explorer-test.qday.info",
+		PublicRPC: "https://rpc-test.qday.info",
+		ZkEVM:     true,
 	},
 	// A local Hardhat or anvil chain; TOKEN_ADDRESS must name the token.
-	"local": {Name: "local", ChainID: 31337},
+	"local": {Name: "local", ChainID: 31337, PublicRPC: "http://127.0.0.1:8545"},
 }
 
 // Lookup returns the network with the given name.

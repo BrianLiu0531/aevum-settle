@@ -28,6 +28,9 @@ import (
 //go:embed dashboard.html
 var dashboard []byte
 
+//go:embed console.html
+var consolePage []byte
+
 // EvidenceSource looks up the L1 transactions behind a block (nil on chains without them).
 type EvidenceSource interface {
 	Evidence(ctx context.Context, block uint64) (*chain.Evidence, error)
@@ -51,6 +54,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Write(dashboard)
+	})
+	mux.HandleFunc("GET /console", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Write(consolePage)
 	})
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok\n")) })
 	mux.HandleFunc("GET /v1/status", s.status)
@@ -85,6 +92,7 @@ type statusResponse struct {
 	Token         string `json:"token"`
 	Router        string `json:"router"`
 	Explorer      string `json:"explorer"`
+	RPCURL        string `json:"rpcUrl,omitempty"` // public RPC for wallets (never the settler's own, which may hold keys)
 	Policy        string `json:"policy"`
 	TrustedBlock  uint64 `json:"trustedBlock"`
 	VirtualBlock  uint64 `json:"virtualBlock"`
@@ -119,7 +127,7 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	}
 	resp := statusResponse{
 		Network: s.Network.Name, ChainID: s.Network.ChainID, Token: s.Network.Token.Hex(), Router: s.Router.Hex(),
-		Explorer: s.Network.Explorer, Policy: s.Policy.String(),
+		Explorer: s.Network.Explorer, RPCURL: s.Network.PublicRPC, Policy: s.Policy.String(),
 		TrustedBlock: st.LatestSeen, VirtualBlock: st.Virtual, VerifiedBlock: st.Finalized,
 	}
 	resp.Totals.Payments, resp.Totals.Confirmed, resp.Totals.Verified = totals.Count, totals.Confirmed, totals.Verified

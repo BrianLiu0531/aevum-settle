@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Demo merchant · Aevum Settle</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --ink:#15171a; --muted:#646b75; --line:#e3e6ea; --ok:#11803d; --warn:#a86200; --bad:#b42318; --accent:#3346d3; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#111317; --card:#1a1d23; --ink:#e8eaed; --muted:#9aa1ab; --line:#2b3038; --ok:#4cc27a; --warn:#e0a23a; --bad:#f0726a; --accent:#8c9bff; } }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; background:var(--bg); color:var(--ink); }
+  main { max-width: 1000px; margin: 0 auto; padding: 20px 16px 48px; }
+  h1 { font-size: 22px; margin: 0 0 4px; } h2 { font-size: 16px; margin: 0 0 12px; }
+  .muted { color: var(--muted); } code, .mono { font-family: ui-monospace, Consolas, monospace; font-size: 13px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px; margin-top:16px; }
+  .grid { display:grid; gap:12px; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+  .product { border:1px solid var(--line); border-radius:8px; padding:12px; }
+  .price { font-size: 20px; font-weight: 600; }
+  table { width:100%; border-collapse: collapse; } th, td { text-align:left; padding:8px 6px; border-bottom:1px solid var(--line); vertical-align: top; }
+  th { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); font-weight: 600; }
+  .pill { display:inline-block; padding:1px 8px; border-radius:99px; font-size:12px; border:1px solid currentColor; }
+  .s-open, .s-paid { color: var(--warn); } .s-confirmed, .s-verified { color: var(--ok); } .s-underpaid, .s-late { color: var(--bad); }
+  .scroll { overflow-x: auto; } a { color: var(--accent); }
+  ul.log { list-style:none; margin:0; padding:0; max-height: 320px; overflow:auto; } ul.log li { padding:4px 0; border-bottom:1px dashed var(--line); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Demo merchant</h1>
+  <div class="muted">A paid API for AI agents. Every request answers <code>402</code> with a tUSD8 invoice; the
+    resource is released only when the settler says the payment has the assurance this amount needs.</div>
+  <div class="muted mono" id="who"></div>
+
+  <section class="card">
+    <h2>Catalog</h2>
+    <div class="grid" id="catalog"></div>
+  </section>
+
+  <section class="card">
+    <h2>Invoices</h2>
+    <div class="scroll"><table>
+      <thead><tr><th>Invoice</th><th>Product</th><th>Amount</th><th>Needs</th><th>Status</th><th>Transaction</th></tr></thead>
+      <tbody id="invoices"><tr><td colspan="6" class="muted">No invoices yet. Run the agent: <code>node agent.js scenarios</code></td></tr></tbody>
+    </table></div>
+  </section>
+
+  <section class="card">
+    <h2>Webhook log</h2>
+    <ul class="log mono" id="log"></ul>
+  </section>
+</main>
+<script>
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const short = (h) => h ? h.slice(0, 10) + "…" + h.slice(-6) : "";
+async function load() {
+  const cat = await (await fetch("/api/catalog")).json();
+  document.getElementById("who").textContent = `merchant ${cat.merchant} · settler policy ${cat.policy}`;
+  document.getElementById("catalog").innerHTML = cat.products.map((p) => `
+    <div class="product"><div>${esc(p.title)}</div><div class="price">${esc(p.price)} tUSD8</div>
+    <div class="muted">confirm at <b>${esc(p.requiredAssurance)}</b></div><code>GET ${esc(p.path)}</code></div>`).join("");
+}
+async function refresh() {
+  try {
+    const { invoices, log } = await (await fetch("/api/invoices")).json();
+    if (invoices.length) document.getElementById("invoices").innerHTML = invoices.map((i) => `
+      <tr><td class="mono">${esc(i.id)}</td><td>${esc(i.product)}</td><td>${esc(i.amount.display)}</td><td>${esc(i.requiredAssurance)}</td>
+      <td><span class="pill s-${esc(i.status)}">${esc(i.status)}</span>${i.assurance ? ` <span class="muted">${esc(i.assurance)}</span>` : ""}</td>
+      <td class="mono">${i.txHash ? (i.explorerUrl ? `<a href="${esc(i.explorerUrl)}" target="_blank" rel="noopener">${short(i.txHash)}</a>` : short(i.txHash)) : ""}</td></tr>`).join("");
+    document.getElementById("log").innerHTML = log.map((l) => `<li><span class="muted">${esc(l.at.slice(11, 19))}</span> ${esc(l.line)}</li>`).join("");
+  } catch {}
+}
+load(); refresh(); setInterval(refresh, 1500);
+</script>
+</body>
+</html>

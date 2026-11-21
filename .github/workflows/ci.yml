@@ -53,3 +53,37 @@ jobs:
       - name: Randomised reorg simulation (100 seeds)
         run: SOAK_SEEDS=100 go test -count=1 -run Randomised ./internal/indexer
       - run: docker build -t aevum-settle-settler .
+
+  demo:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: demo
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: demo/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: docker build -t aevum-settle-merchant .
+
+  # The whole flow: Hardhat node -> contracts -> settler -> merchant -> agent scenarios,
+  # including a reorg that must reach the merchant as payment.reverted.
+  end-to-end:
+    runs-on: ubuntu-latest
+    needs: [contracts, settler, demo]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: settler/go.mod
+          cache-dependency-path: settler/go.sum
+      - run: scripts/local-demo.sh
+      - if: failure()
+        run: tail -n 100 .demo/*.log

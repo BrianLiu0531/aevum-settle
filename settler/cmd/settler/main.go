@@ -52,6 +52,7 @@ func run() error {
 
 	rpc, err := chain.DialRPC(ctx, chain.RPCConfig{
 		URLs: cfg.RPCURLs, MaxRPS: cfg.RPCMaxRPS, MaxAttempts: cfg.RPCMaxAttempts, Timeout: cfg.RPCTimeout, ZkEVM: cfg.Network.ZkEVM,
+		LocalVirtualDepth: cfg.LocalVirtualDepth, LocalVerifiedDepth: cfg.LocalVerifiedDepth,
 	}, log)
 	if err != nil {
 		return err

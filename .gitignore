@@ -6,3 +6,6 @@ contracts/typechain-types/
 contracts/coverage/
 *.exe
 *.log
+.env.local
+demo/node_modules/
+.demo/
