@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: contracts
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: contracts/package-lock.json
+      - run: npm ci
+      - run: npx hardhat test
+
+  settler:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: settler
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: settler_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s
+          --health-retries 15
+    env:
+      TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/settler_test?sslmode=disable
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: settler/go.mod
+          cache-dependency-path: settler/go.sum
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
+      - run: go vet ./...
+      - name: Tests (race detector)
+        run: go test -race -count=1 ./...
+      - name: Randomised reorg simulation (100 seeds)
+        run: SOAK_SEEDS=100 go test -count=1 -run Randomised ./internal/indexer
+      - run: docker build -t aevum-settle-settler .
