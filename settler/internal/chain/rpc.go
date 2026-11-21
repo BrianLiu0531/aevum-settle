@@ -328,6 +328,51 @@ func (c *RPC) Payments(ctx context.Context, router common.Address, merchants []c
 		"fromBlock": hexutil.EncodeUint64(from),
 		"toBlock":   hexutil.EncodeUint64(to),
 	}
+	logs, err := c.getLogs(ctx, filter, to)
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]Payment{}
+	for _, l := range logs {
+		if p, ok := l.payment(); ok {
+			seen[p.Key()] = p
+		}
+	}
+	return sortPayments(seen), nil
+}
+
+func (c *RPC) Mandates(ctx context.Context, router common.Address, from, to uint64) ([]MandateEvent, error) {
+	filter := map[string]any{
+		"address":   []common.Address{router},
+		"topics":    [][]common.Hash{{token.MandateGrantedTopic, token.MandateRevokedTopic}},
+		"fromBlock": hexutil.EncodeUint64(from),
+		"toBlock":   hexutil.EncodeUint64(to),
+	}
+	logs, err := c.getLogs(ctx, filter, to)
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]MandateEvent{}
+	for _, l := range logs {
+		if m, ok := l.mandate(); ok {
+			seen[m.Key()] = m
+		}
+	}
+	out := make([]MandateEvent, 0, len(seen))
+	for _, m := range seen {
+		out = append(out, m)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].BlockNumber != out[j].BlockNumber {
+			return out[i].BlockNumber < out[j].BlockNumber
+		}
+		return out[i].LogIndex < out[j].LogIndex
+	})
+	return out, nil
+}
+
+// getLogs runs eth_getLogs on an endpoint whose head has reached block to.
+func (c *RPC) getLogs(ctx context.Context, filter map[string]any, to uint64) ([]rpcLog, error) {
 	var logs []rpcLog
 	err := c.do(ctx, "eth_getLogs", 2, func(ctx context.Context, ep *endpoint) error {
 		// Many nodes answer a range past their head with the logs they have, silently dropping the rest.
@@ -342,16 +387,7 @@ func (c *RPC) Payments(ctx context.Context, router common.Address, merchants []c
 		logs = nil
 		return ep.rpc.CallContext(ctx, &logs, "eth_getLogs", filter)
 	})
-	if err != nil {
-		return nil, err
-	}
-	seen := map[string]Payment{}
-	for _, l := range logs {
-		if p, ok := l.payment(); ok {
-			seen[p.Key()] = p
-		}
-	}
-	return sortPayments(seen), nil
+	return logs, err
 }
 
 // rpcLog decodes only the log fields used here.
@@ -382,6 +418,45 @@ func (l rpcLog) payment() (Payment, bool) {
 		Agent:       common.BytesToAddress(l.Data[:32]),
 		Amount:      new(big.Int).SetBytes(l.Data[32:]),
 	}, true
+}
+
+// mandate decodes MandateGranted(address indexed owner, address indexed agent, uint128 perPaymentCap,
+// uint128 dailyCap, uint64 expiresAt, address[] merchants) and MandateRevoked(address indexed owner,
+// address indexed agent).
+func (l rpcLog) mandate() (MandateEvent, bool) {
+	if l.Removed || len(l.Topics) != 3 {
+		return MandateEvent{}, false
+	}
+	m := MandateEvent{
+		BlockNumber: uint64(l.BlockNumber), BlockHash: l.BlockHash, TxHash: l.TxHash, LogIndex: uint(l.Index),
+		Owner: common.BytesToAddress(l.Topics[1].Bytes()), Agent: common.BytesToAddress(l.Topics[2].Bytes()),
+	}
+	switch l.Topics[0] {
+	case token.MandateRevokedTopic:
+		m.Revoked = true
+		return m, true
+	case token.MandateGrantedTopic:
+		word := func(i int) []byte { return l.Data[i*32 : (i+1)*32] }
+		if len(l.Data) < 5*32 {
+			return MandateEvent{}, false
+		}
+		m.PerPaymentCap = new(big.Int).SetBytes(word(0))
+		m.DailyCap = new(big.Int).SetBytes(word(1))
+		m.ExpiresAt = new(big.Int).SetBytes(word(2)).Uint64()
+		offset := new(big.Int).SetBytes(word(3))
+		if !offset.IsUint64() || offset.Uint64() != 4*32 {
+			return MandateEvent{}, false
+		}
+		n := new(big.Int).SetBytes(word(4))
+		if !n.IsUint64() || n.Uint64() > 1024 || len(l.Data) < (5+int(n.Uint64()))*32 {
+			return MandateEvent{}, false
+		}
+		for i := 0; i < int(n.Uint64()); i++ {
+			m.Merchants = append(m.Merchants, common.BytesToAddress(word(5+i)))
+		}
+		return m, true
+	}
+	return MandateEvent{}, false
 }
 
 func sortPayments(m map[string]Payment) []Payment {

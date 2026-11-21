@@ -154,11 +154,11 @@ func (ix *Indexer) Step(ctx context.Context) (StepResult, error) {
 	}
 
 	var blocks []chain.Header
-	var payments []chain.Payment
+	var logs routerLogs
 	if from <= tips.Finalized {
-		blocks, payments, err = ix.finalizedBatch(ctx, cur, from, min(tips.Finalized, from+ix.span-1))
+		blocks, logs, err = ix.finalizedBatch(ctx, cur, from, min(tips.Finalized, from+ix.span-1))
 	} else {
-		blocks, payments, err = ix.unfinalizedBatch(ctx, cur, from, min(tips.Latest, from+min(ix.span, ix.cfg.MaxUnfinalizedBatch)-1))
+		blocks, logs, err = ix.unfinalizedBatch(ctx, cur, from, min(tips.Latest, from+min(ix.span, ix.cfg.MaxUnfinalizedBatch)-1))
 	}
 	if errors.Is(err, errReorg) {
 		return ix.rewind(ctx, cur)
@@ -167,7 +167,7 @@ func (ix *Indexer) Step(ctx context.Context) (StepResult, error) {
 		return StepResult{}, err
 	}
 
-	res, err := ix.store.Apply(ctx, store.Batch{Parent: cur, Blocks: blocks, Payments: payments, Tips: tips, Policy: ix.cfg.Policy})
+	res, err := ix.store.Apply(ctx, store.Batch{Parent: cur, Blocks: blocks, Payments: logs.payments, Mandates: logs.mandates, Tips: tips, Policy: ix.cfg.Policy})
 	if err != nil {
 		return StepResult{}, fmt.Errorf("apply blocks %d-%d: %w", from, blocks[len(blocks)-1].Number, err)
 	}
@@ -211,15 +211,18 @@ func (ix *Indexer) idle(ctx context.Context, cur *chain.Header, tips chain.Tips)
 }
 
 // finalizedBatch indexes from..to, all at or below the finalized height.
-func (ix *Indexer) finalizedBatch(ctx context.Context, cur *chain.Header, from, to uint64) ([]chain.Header, []chain.Payment, error) {
-	payments, to, err := ix.fetchPayments(ctx, from, to)
+func (ix *Indexer) finalizedBatch(ctx context.Context, cur *chain.Header, from, to uint64) ([]chain.Header, routerLogs, error) {
+	logs, to, err := ix.fetchLogs(ctx, from, to)
 	if err != nil {
-		return nil, nil, err
+		return nil, routerLogs{}, err
 	}
-	// Headers for the batch boundaries (parent check and new cursor) and for blocks with payments (timestamps)
+	// Headers for the batch boundaries (parent check and new cursor) and for blocks with logs (timestamps)
 	want := map[uint64]bool{from: true, to: true}
-	for _, t := range payments {
+	for _, t := range logs.payments {
 		want[t.BlockNumber] = true
+	}
+	for _, m := range logs.mandates {
+		want[m.BlockNumber] = true
 	}
 	numbers := make([]uint64, 0, len(want))
 	for n := range want {
@@ -228,42 +231,42 @@ func (ix *Indexer) finalizedBatch(ctx context.Context, cur *chain.Header, from, 
 	sort.Slice(numbers, func(i, j int) bool { return numbers[i] < numbers[j] })
 	headers, err := ix.chain.Headers(ctx, numbers)
 	if err != nil {
-		return nil, nil, err
+		return nil, routerLogs{}, err
 	}
-	if err := checkBatch(cur, headers, payments, false); err != nil {
-		return nil, nil, err
+	if err := checkBatch(cur, headers, logs, false); err != nil {
+		return nil, routerLogs{}, err
 	}
-	return headers, payments, nil
+	return headers, logs, nil
 }
 
 // unfinalizedBatch indexes from..to above the finalized height, storing every header.
-func (ix *Indexer) unfinalizedBatch(ctx context.Context, cur *chain.Header, from, to uint64) ([]chain.Header, []chain.Payment, error) {
+func (ix *Indexer) unfinalizedBatch(ctx context.Context, cur *chain.Header, from, to uint64) ([]chain.Header, routerLogs, error) {
 	headers, err := ix.chain.Headers(ctx, chain.Range(from, to))
 	if err != nil {
-		return nil, nil, err
+		return nil, routerLogs{}, err
 	}
-	payments, to, err := ix.fetchPayments(ctx, from, to)
+	logs, to, err := ix.fetchLogs(ctx, from, to)
 	if err != nil {
-		return nil, nil, err
+		return nil, routerLogs{}, err
 	}
 	headers = headers[:to-from+1]
-	if err := checkBatch(cur, headers, payments, true); err != nil {
-		return nil, nil, err
+	if err := checkBatch(cur, headers, logs, true); err != nil {
+		return nil, routerLogs{}, err
 	}
 	// The logs were read after the headers. If the batch tip is unchanged, the whole range is
 	// unchanged (each header commits to its parent), so the logs and headers describe the same chain.
 	tip, err := ix.chain.Header(ctx, to)
 	if err != nil {
-		return nil, nil, err
+		return nil, routerLogs{}, err
 	}
 	if tip.Hash != headers[len(headers)-1].Hash {
-		return nil, nil, fmt.Errorf("%w: block %d changed", errChainMoved, to)
+		return nil, routerLogs{}, fmt.Errorf("%w: block %d changed", errChainMoved, to)
 	}
-	return headers, payments, nil
+	return headers, logs, nil
 }
 
 // checkBatch verifies the batch extends the cursor and that every log belongs to its block's header.
-func checkBatch(cur *chain.Header, headers []chain.Header, payments []chain.Payment, contiguous bool) error {
+func checkBatch(cur *chain.Header, headers []chain.Header, logs routerLogs, contiguous bool) error {
 	if cur != nil && headers[0].ParentHash != cur.Hash {
 		return errReorg
 	}
@@ -274,21 +277,37 @@ func checkBatch(cur *chain.Header, headers []chain.Header, payments []chain.Paym
 		}
 		byNumber[h.Number] = h
 	}
-	for _, t := range payments {
+	for _, t := range logs.payments {
 		h, ok := byNumber[t.BlockNumber]
 		if !ok || h.Hash != t.BlockHash {
 			return fmt.Errorf("%w: log %s is from a different block %d", errChainMoved, t.Key(), t.BlockNumber)
 		}
 	}
+	for _, m := range logs.mandates {
+		h, ok := byNumber[m.BlockNumber]
+		if !ok || h.Hash != m.BlockHash {
+			return fmt.Errorf("%w: log %s is from a different block %d", errChainMoved, m.Key(), m.BlockNumber)
+		}
+	}
 	return nil
 }
 
-// fetchPayments queries logs for from..to, halving the range while the node says it is too large.
+// routerLogs are the router's logs in one batch range.
+type routerLogs struct {
+	payments []chain.Payment
+	mandates []chain.MandateEvent
+}
+
+// fetchLogs queries payment and mandate logs for from..to, halving the range while the node says it is too large.
 // It returns the payments and the end of the range actually covered. After a success the range
 // doubles again, up to the largest size the node has not rejected.
-func (ix *Indexer) fetchPayments(ctx context.Context, from, to uint64) ([]chain.Payment, uint64, error) {
+func (ix *Indexer) fetchLogs(ctx context.Context, from, to uint64) (routerLogs, uint64, error) {
 	for {
 		ts, err := ix.chain.Payments(ctx, ix.cfg.Router, ix.cfg.Merchants, from, to)
+		var ms []chain.MandateEvent
+		if err == nil {
+			ms, err = ix.chain.Mandates(ctx, ix.cfg.Router, from, to)
+		}
 		if err == nil {
 			if ix.successes++; ix.successes >= forgetCeilingAfter {
 				ix.ceiling, ix.successes = ix.cfg.MaxRange, 0
@@ -296,11 +315,11 @@ func (ix *Indexer) fetchPayments(ctx context.Context, from, to uint64) ([]chain.
 			if to-from+1 >= ix.span {
 				ix.span = min(ix.ceiling, ix.span*2)
 			}
-			return ts, to, nil
+			return routerLogs{payments: ts, mandates: ms}, to, nil
 		}
 		size := to - from + 1
 		if !chain.IsRangeError(err) || size == 1 {
-			return nil, 0, fmt.Errorf("get payments %d-%d: %w", from, to, err)
+			return routerLogs{}, 0, fmt.Errorf("get logs %d-%d: %w", from, to, err)
 		}
 		ix.ceiling, ix.successes = size-1, 0
 		ix.span = max(1, size/2)

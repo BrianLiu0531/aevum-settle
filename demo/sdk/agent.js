@@ -6,6 +6,7 @@
 // contract enforces the same rules again; the local check is a courtesy, not the security.
 import { Contract, Interface, ethers } from "ethers";
 import { ROUTER_ABI, TOKEN_ABI } from "./abi.js";
+import { HEADERS, X402_VERSION, decodeHeader, encodeHeader, signExact } from "./x402.js";
 
 export const DECIMALS = 6;
 export const formatAmount = (raw) => ethers.formatUnits(raw, DECIMALS);
@@ -157,33 +158,92 @@ export class AgentPayer {
   }
 
   /**
-   * fetch() that pays HTTP 402 invoices. It pays at most once per resource request, then retries
-   * with the invoice id until the merchant answers 200 or `waitMs` runs out (then it returns the
-   * last 202 so the caller can resume with `resume`).
+   * fetch() that pays x402 invoices with the "aevum-mandate" scheme: on a 402 it checks the terms
+   * against the mandate, pays once on chain, then retries with PAYMENT-SIGNATURE until the
+   * merchant answers 200, or `waitMs` runs out (it then returns the last 402 with
+   * settlement_pending, and `resume` picks it up again).
    */
   async fetch(url, { waitMs = 120_000, pollMs = 1_000, skipChecks = false, headers = {} } = {}) {
-    let res = await fetch(url, { headers });
+    const res = await fetch(url, { headers });
     if (res.status !== 402) return { response: res, paid: null };
-    const body = await res.json();
-    const invoice = body.invoice;
-    if (!invoice) throw new Error(`402 from ${url} without an invoice`);
+    const offer = await readOffer(res);
+    const accepted = offer.required.accepts.find((a) => a.scheme === "aevum-mandate" && a.network === `eip155:${this.chainId}`);
+    if (!accepted) throw new PaymentRefused("NO_ACCEPTABLE_SCHEME", "the merchant does not accept aevum-mandate payments on this chain");
+    const invoice = invoiceFromRequirements(accepted);
     this.log(`402: ${invoice.id} asks ${invoice.amount.display} tUSD8 (merchant needs ${invoice.requiredAssurance ?? "?"} assurance)`);
     const paid = await this.pay(invoice, { skipChecks });
-    res = await this.resume(url, invoice, { waitMs, pollMs, headers });
-    return { response: res, paid, invoice };
+    const payload = { x402Version: X402_VERSION, resource: offer.required.resource, accepted, payload: { txHash: paid.txHash, invoiceId: paid.invoiceId } };
+    return { response: await retryWithPayment(url, payload, { waitMs, pollMs, headers, log: this.log }), paid, invoice };
   }
 
-  /** Polls the merchant with a paid invoice until it releases the resource. */
+  /** Keeps asking the merchant to release a paid invoice. */
   async resume(url, invoice, { waitMs = 120_000, pollMs = 1_000, headers = {} } = {}) {
-    const deadline = Date.now() + waitMs;
-    let last = "";
-    for (;;) {
-      const res = await fetch(url, { headers: { ...headers, "X-Payment-Invoice": invoice.id } });
-      if (res.status !== 202 || Date.now() > deadline) return res;
-      const status = await res.json().catch(() => ({}));
-      const line = `waiting: payment is ${status.assurance ?? "not indexed yet"}, merchant needs ${status.required ?? invoice.requiredAssurance}`;
-      if (line !== last) this.log((last = line));
-      await sleep(Math.max(pollMs, (Number(res.headers.get("retry-after")) || 0) * 1000));
+    const accepted = { scheme: "aevum-mandate", network: `eip155:${this.chainId}`, extra: { invoice: invoice.id } };
+    return retryWithPayment(url, { x402Version: X402_VERSION, accepted, payload: {} }, { waitMs, pollMs, headers, log: this.log });
+  }
+}
+
+/**
+ * A standard x402 "exact" client: pays from its own wallet by signing an EIP-3009 authorization.
+ * It needs no gas and no allowance (the merchant settles it), but also has no mandate: use it for a
+ * person, or an agent that holds its own budget.
+ */
+export class ExactPayer {
+  constructor({ signer, chainId, maxPrice, log = () => {} }) {
+    this.signer = signer;
+    this.chainId = Number(chainId);
+    this.maxPrice = maxPrice != null ? parseAmount(maxPrice) : undefined;
+    this.log = log;
+  }
+
+  async fetch(url, { waitMs = 120_000, pollMs = 1_000, headers = {} } = {}) {
+    const res = await fetch(url, { headers });
+    if (res.status !== 402) return { response: res, payload: null };
+    const offer = await readOffer(res);
+    const accepted = offer.required.accepts.find((a) => a.scheme === "exact" && a.network === `eip155:${this.chainId}`);
+    if (!accepted) throw new PaymentRefused("NO_ACCEPTABLE_SCHEME", "the merchant does not accept x402 exact payments on this chain");
+    if (this.maxPrice != null && BigInt(accepted.amount) > this.maxPrice) {
+      throw new PaymentRefused("OVER_AGENT_BUDGET", `${formatAmount(accepted.amount)} tUSD8 is above this payer's limit of ${formatAmount(this.maxPrice)}`);
     }
+    const payload = await signExact(this.signer, accepted, offer.required.resource);
+    this.log(`402: signed an EIP-3009 authorization for ${formatAmount(accepted.amount)} tUSD8 to ${accepted.payTo} (no gas)`);
+    return { response: await retryWithPayment(url, payload, { waitMs, pollMs, headers, log: this.log }), payload };
+  }
+}
+
+async function readOffer(res) {
+  const body = await res.json().catch(() => ({}));
+  const required = decodeHeader(res.headers.get(HEADERS.required)) ?? (body.accepts ? body : undefined);
+  if (!required?.accepts?.length) throw new Error(`402 from ${res.url} without x402 payment requirements`);
+  return { required, body };
+}
+
+export function invoiceFromRequirements(a) {
+  return {
+    id: a.extra.invoice,
+    invoiceId: a.extra.invoiceId,
+    merchant: a.payTo,
+    amount: { raw: String(a.amount), display: formatAmount(a.amount) },
+    token: a.asset,
+    router: a.extra.router,
+    chainId: Number(a.network.split(":")[1]),
+    expiresAt: Math.floor(Date.now() / 1000) + Number(a.maxTimeoutSeconds),
+    requiredAssurance: a.extra.requiredAssurance,
+  };
+}
+
+/** Sends the payment header until the merchant releases the resource or the wait runs out. */
+async function retryWithPayment(url, payload, { waitMs, pollMs, headers, log }) {
+  const deadline = Date.now() + waitMs;
+  const header = encodeHeader(payload);
+  let last = "";
+  for (;;) {
+    const res = await fetch(url, { headers: { ...headers, [HEADERS.signature]: header } });
+    const settlement = decodeHeader(res.headers.get(HEADERS.response));
+    if (res.status !== 402 || settlement?.errorReason !== "settlement_pending" || Date.now() > deadline) return res;
+    const body = await res.clone().json().catch(() => ({}));
+    const line = `waiting: payment is ${body.assurance ?? "not indexed yet"}, merchant needs ${body.required ?? "?"}`;
+    if (line !== last) log((last = line));
+    await sleep(Math.max(pollMs, (Number(res.headers.get("retry-after")) || 0) * 1000));
   }
 }

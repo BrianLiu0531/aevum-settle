@@ -27,6 +27,7 @@ type Spec struct {
 type block struct {
 	header   chain.Header
 	payments []chain.Payment
+	mandates []chain.MandateEvent
 }
 
 // Fake is a chain.Client backed by memory. It is safe for concurrent use.
@@ -104,6 +105,50 @@ func (f *Fake) Mine(specs ...Spec) uint64 {
 	}
 	f.blocks = append(f.blocks, b)
 	return n
+}
+
+// MineMandates appends one block containing the given mandate events (their block and tx fields
+// are filled in) and returns its number.
+func (f *Fake) MineMandates(events ...chain.MandateEvent) uint64 {
+	n := f.Mine()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	b := &f.blocks[n]
+	for i, e := range events {
+		e.BlockNumber, e.BlockHash, e.LogIndex = n, b.header.Hash, uint(i)
+		if e.TxHash == (common.Hash{}) {
+			e.TxHash = f.unique("mandate-tx")
+		}
+		b.mandates = append(b.mandates, e)
+	}
+	return n
+}
+
+func (f *Fake) Mandates(_ context.Context, _ common.Address, from, to uint64) ([]chain.MandateEvent, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.maybeFail(); err != nil {
+		return nil, err
+	}
+	if f.MaxLogRange > 0 && to-from+1 > f.MaxLogRange {
+		return nil, fmt.Errorf("%w: requested %d blocks", chain.ErrRangeTooLarge, to-from+1)
+	}
+	var out []chain.MandateEvent
+	for n := from; n <= to && n < uint64(len(f.blocks)); n++ {
+		out = append(out, f.blocks[n].mandates...)
+	}
+	return out, nil
+}
+
+// CanonicalMandates returns every mandate event on the canonical chain.
+func (f *Fake) CanonicalMandates() []chain.MandateEvent {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []chain.MandateEvent
+	for _, b := range f.blocks {
+		out = append(out, b.mandates...)
+	}
+	return out
 }
 
 // MineEmpty mines n blocks without payments.

@@ -19,7 +19,7 @@
   table { width:100%; border-collapse: collapse; } th, td { text-align:left; padding:8px 6px; border-bottom:1px solid var(--line); vertical-align: top; }
   th { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); font-weight: 600; }
   .pill { display:inline-block; padding:1px 8px; border-radius:99px; font-size:12px; border:1px solid currentColor; }
-  .s-open, .s-paid { color: var(--warn); } .s-confirmed, .s-verified { color: var(--ok); } .s-underpaid, .s-late { color: var(--bad); }
+  .s-open, .s-paid { color: var(--warn); } .s-confirmed, .s-verified { color: var(--ok); } .s-underpaid, .s-late { color: var(--bad); } .s-refunded { color: var(--muted); }
   .scroll { overflow-x: auto; } a { color: var(--accent); }
   ul.log { list-style:none; margin:0; padding:0; max-height: 320px; overflow:auto; } ul.log li { padding:4px 0; border-bottom:1px dashed var(--line); }
 </style>
@@ -27,8 +27,10 @@
 <body>
 <main>
   <h1>Demo merchant</h1>
-  <div class="muted">A paid API for AI agents. Every request answers <code>402</code> with a tUSD8 invoice; the
-    resource is released only when the settler says the payment has the assurance this amount needs.</div>
+  <div class="muted">A paid API for AI agents, speaking x402 v2. Every request answers <code>402</code> with
+    <code>PAYMENT-REQUIRED</code>: pay as an agent under a mandate (<code>aevum-mandate</code>) or with a signed EIP-3009
+    authorization (<code>exact</code>, no gas). The resource is released only when the settler says the payment has the
+    assurance this amount needs; underpaid or late payments are refunded automatically.</div>
   <div class="muted mono" id="who"></div>
 
   <section class="card">
@@ -39,8 +41,8 @@
   <section class="card">
     <h2>Invoices</h2>
     <div class="scroll"><table>
-      <thead><tr><th>Invoice</th><th>Product</th><th>Amount</th><th>Needs</th><th>Status</th><th>Transaction</th></tr></thead>
-      <tbody id="invoices"><tr><td colspan="6" class="muted">No invoices yet. Run the agent: <code>node agent.js scenarios</code></td></tr></tbody>
+      <thead><tr><th>Invoice</th><th>Product</th><th>Amount</th><th>Paid via</th><th>Needs</th><th>Status</th><th>Transaction</th></tr></thead>
+      <tbody id="invoices"><tr><td colspan="7" class="muted">No invoices yet. Run the agent: <code>node agent.js scenarios</code></td></tr></tbody>
     </table></div>
   </section>
 
@@ -63,8 +65,9 @@ async function refresh() {
   try {
     const { invoices, log } = await (await fetch("/api/invoices")).json();
     if (invoices.length) document.getElementById("invoices").innerHTML = invoices.map((i) => `
-      <tr><td class="mono">${esc(i.id)}</td><td>${esc(i.product)}</td><td>${esc(i.amount.display)}</td><td>${esc(i.requiredAssurance)}</td>
-      <td><span class="pill s-${esc(i.status)}">${esc(i.status)}</span>${i.assurance ? ` <span class="muted">${esc(i.assurance)}</span>` : ""}</td>
+      <tr><td class="mono">${esc(i.id)}</td><td>${esc(i.product)}</td><td>${esc(i.amount.display)}${i.paid && i.paid.raw !== i.amount.raw ? ` <span class="muted">(paid ${esc(i.paid.display)})</span>` : ""}</td>
+      <td>${esc(i.scheme ?? "")}</td><td>${esc(i.requiredAssurance)}</td>
+      <td><span class="pill s-${esc(i.status)}">${esc(i.status)}</span>${i.assurance ? ` <span class="muted">${esc(i.assurance)}</span>` : ""}${i.refund ? `<div class="muted">refund ${esc(i.refund.amount.display)} ${esc(i.refund.status)}${i.refund.txHash ? ` · ${i.refund.explorerUrl ? `<a href="${esc(i.refund.explorerUrl)}" target="_blank" rel="noopener">${short(i.refund.txHash)}</a>` : short(i.refund.txHash)}` : ""}</div>` : ""}</td>
       <td class="mono">${i.txHash ? (i.explorerUrl ? `<a href="${esc(i.explorerUrl)}" target="_blank" rel="noopener">${short(i.txHash)}</a>` : short(i.txHash)) : ""}</td></tr>`).join("");
     document.getElementById("log").innerHTML = log.map((l) => `<li><span class="muted">${esc(l.at.slice(11, 19))}</span> ${esc(l.line)}</li>`).join("");
   } catch {}

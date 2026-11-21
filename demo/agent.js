@@ -6,6 +6,7 @@
 //   node agent.js buy <product|url> [--wait s]   GET a paid resource, paying its 402 invoice
 //   node agent.js wait <product|url> <INV-id>    keep waiting for a paid invoice to be released
 //   node agent.js scenarios                      the demo: three assurance tiers + every refusal
+//   node agent.js pay-exact <product|url>        pay as a person, standard x402 "exact" (EIP-3009, no gas)
 //
 //   node agent.js owner approve [amount]         let the router spend the owner's tUSD8
 //   node agent.js owner grant [--per 150] [--daily 200] [--days 7] [--merchant 0x..]...
@@ -16,7 +17,8 @@
 // AGENT_PRIVATE_KEY, MERCHANT_URL, and OWNER_PRIVATE_KEY for the owner commands.
 import { Contract, JsonRpcProvider, NonceManager, Wallet, ethers } from "ethers";
 import { need, opt } from "./env.js";
-import { AgentPayer, PaymentRefused, formatAmount, parseAmount } from "./sdk/agent.js";
+import { AgentPayer, ExactPayer, PaymentRefused, formatAmount, parseAmount } from "./sdk/agent.js";
+import { HEADERS, decodeHeader } from "./sdk/x402.js";
 import { ROUTER_ABI, TOKEN_ABI } from "./sdk/abi.js";
 
 const RPC_URL = opt("RPC_URL", "https://rpc-test.qday.info");
@@ -80,7 +82,7 @@ async function buy(agent, target, { waitMs, skipChecks } = {}) {
     console.log(c.g(`  ✓ 200 after ${secs}s`) + c.d(` (released at ${body.receipt?.assurance ?? "-"} assurance)`));
     return { ok: true, invoice, paid, body };
   }
-  if (response.status === 202) {
+  if (response.status === 402 && decodeHeader(response.headers.get(HEADERS.response))?.errorReason === "settlement_pending") {
     console.log(c.y(`  … still pending after ${secs}s; resume with: node agent.js wait ${target} ${invoice.id}`));
     return { ok: false, pending: true, invoice, paid };
   }
@@ -166,8 +168,32 @@ async function scenarios(opts) {
     console.log(c.d("\n9. (skipped: set OWNER_PRIVATE_KEY to demo revocation)"));
   }
 
+  if (process.env.OWNER_PRIVATE_KEY) {
+    await step("10. Standard x402 \"exact\": the owner pays from their own wallet by signing an EIP-3009 authorization (no gas, no allowance)", async () => {
+      const r = await payExact("quote", { waitMs });
+      return r.ok && r.body.receipt?.scheme === "exact";
+    });
+    await step("11. A payment below the price: the merchant does not deliver, and refunds it once the settler confirms it", async () => {
+      const inv = await invoiceFor("quote");
+      const tx = await ownerRouter().pay(inv.invoiceId, inv.merchant, BigInt(inv.amount.raw) - 10_000n);
+      await tx.wait();
+      console.log(c.d(`  · paid ${formatAmount(BigInt(inv.amount.raw) - 10_000n)} of ${inv.amount.display} for ${inv.id}: ${txLink(tx.hash)}`));
+      const deadline = Date.now() + waitMs;
+      while (Date.now() < deadline) {
+        const state = await (await fetch(`${MERCHANT_URL}/api/invoices/${inv.id}`)).json();
+        if (state.refund?.status === "sent") {
+          console.log(c.g(`  ✓ ${state.status}: ${state.refund.amount.display} tUSD8 back to the payer: ${txLink(state.refund.txHash)}`));
+          return state.status === "refunded";
+        }
+        await new Promise((ok) => setTimeout(ok, 1000));
+      }
+      console.log(c.r("  ✗ no refund"));
+      return false;
+    });
+  }
+
   if (local) {
-    await step("10. Local only: a reorg removes a delivered payment; the merchant is told and withdraws access", async () => {
+    await step("12. Local only: a reorg removes a delivered payment; the merchant is told and withdraws access", async () => {
       const snapshot = await provider.send("evm_snapshot", []);
       const r = await buy(agent, "quote", { waitMs });
       if (!r.ok) return false;
@@ -224,6 +250,21 @@ async function ownerCommand([cmd, ...rest]) {
   console.log(`${cmd}: block ${receipt.blockNumber} ${txLink(tx.hash)}`);
 }
 
+async function payExact(target, { waitMs = 300_000 } = {}) {
+  const payer = new ExactPayer({ signer: new Wallet(need("OWNER_PRIVATE_KEY"), provider), chainId: CHAIN_ID, log: (m) => console.log(c.d("  · " + m)) });
+  const started = Date.now();
+  const { response } = await payer.fetch(urlFor(target), { waitMs });
+  const secs = ((Date.now() - started) / 1000).toFixed(1);
+  const settlement = decodeHeader(response.headers.get(HEADERS.response));
+  if (response.status === 200) {
+    const body = await response.json();
+    console.log(c.g(`  ✓ 200 after ${secs}s`) + c.d(` (scheme ${body.receipt.scheme}, settled by the merchant in ${txLink(settlement?.transaction)})`));
+    return { ok: true, body };
+  }
+  console.log(c.r(`  ✗ ${response.status} ${settlement?.errorReason ?? ""} ${settlement?.errorMessage ?? (await response.text())}`));
+  return { ok: false };
+}
+
 async function main() {
   const [cmd, ...args] = process.argv.slice(2);
   const f = flags(args);
@@ -239,6 +280,9 @@ async function main() {
       console.log(res.status, await res.text());
       return;
     }
+    case "pay-exact":
+      if (!f._[0]) throw new Error("usage: pay-exact <product|url>");
+      return void (await payExact(f._[0]));
     case "scenarios":
       return scenarios(f);
     case "owner":

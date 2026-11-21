@@ -5,6 +5,21 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
+/// EIP-3009, as implemented by tUSD8 (a USDC-style FiatToken v2).
+interface IERC3009 {
+    function transferWithAuthorization(
+        address from,
+        address to,
+        uint256 value,
+        uint256 validAfter,
+        uint256 validBefore,
+        bytes32 nonce,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) external;
+}
+
 /// @title AgentPayRouter
 /// @notice Invoice payments in one ERC-20 (tUSD8 on QDay Aevum), made by a person or by an
 ///         AI agent acting under a mandate the person granted.
@@ -132,6 +147,28 @@ contract AgentPayRouter is ReentrancyGuard {
         m.spentToday = uint128(spent + amount);
 
         _settle(invoiceId, merchant, owner, msg.sender, amount);
+    }
+
+    /// @notice Settles an x402 "exact" payment: an EIP-3009 transfer authorization the payer signed
+    ///         off-chain to the caller, recorded as payment of the caller's invoice. The payer needs
+    ///         no gas and no allowance. Only the payee can submit it, so nobody can attach someone
+    ///         else's authorization to a different invoice, and the funds go straight to the payee.
+    function settleAuthorization(
+        bytes32 invoiceId,
+        address from,
+        uint256 value,
+        uint256 validAfter,
+        uint256 validBefore,
+        bytes32 nonce,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) external nonReentrant {
+        if (value == 0) revert ZeroAmount();
+        if (invoicePaid[msg.sender][invoiceId]) revert InvoiceAlreadyPaid(invoiceId);
+        invoicePaid[msg.sender][invoiceId] = true;
+        emit InvoicePaid(invoiceId, msg.sender, from, address(0), value);
+        IERC3009(address(token)).transferWithAuthorization(from, msg.sender, value, validAfter, validBefore, nonce, v, r, s);
     }
 
     function _settle(bytes32 invoiceId, address merchant, address payer, address agent, uint256 amount) private {

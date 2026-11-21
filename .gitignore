@@ -9,3 +9,4 @@ contracts/coverage/
 .env.local
 demo/node_modules/
 .demo/
+demo/data/

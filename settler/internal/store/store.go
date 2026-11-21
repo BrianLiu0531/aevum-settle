@@ -163,6 +163,7 @@ type Batch struct {
 	Parent   *chain.Header // the cursor the batch was built on; nil for the first batch
 	Blocks   []chain.Header
 	Payments []chain.Payment
+	Mandates []chain.MandateEvent
 	Tips     chain.Tips
 	Policy   Policy
 }
@@ -205,6 +206,11 @@ func (s *Store) Apply(ctx context.Context, b Batch) (Result, error) {
 				return err
 			}
 			res.Inserted = n
+		}
+		if len(b.Mandates) > 0 {
+			if err := s.insertMandates(ctx, tx, b.Mandates, b.Blocks); err != nil {
+				return err
+			}
 		}
 
 		// Assurance can only be applied to blocks we have stored
@@ -401,6 +407,9 @@ func (s *Store) Rewind(ctx context.Context, expected *chain.Header, ancestor uin
 			SELECT count(*) FROM gone`, s.chainID, int64(ancestor)).Scan(&orphaned); err != nil {
 			return fmt.Errorf("remove orphaned payments: %w", err)
 		}
+		if _, err := tx.Exec(ctx, `DELETE FROM mandate_events WHERE chain_id = $1 AND block_number > $2`, s.chainID, int64(ancestor)); err != nil {
+			return fmt.Errorf("remove orphaned mandate events: %w", err)
+		}
 		if _, err := tx.Exec(ctx, `DELETE FROM blocks WHERE chain_id = $1 AND number > $2`, s.chainID, int64(ancestor)); err != nil {
 			return err
 		}
@@ -408,6 +417,42 @@ func (s *Store) Rewind(ctx context.Context, expected *chain.Header, ancestor uin
 		return err
 	})
 	return orphaned, err
+}
+
+func (s *Store) insertMandates(ctx context.Context, tx pgx.Tx, ms []chain.MandateEvent, blocks []chain.Header) error {
+	times := make(map[uint64]uint64, len(blocks))
+	for _, h := range blocks {
+		times[h.Number] = h.Time
+	}
+	for _, m := range ms {
+		bt, ok := times[m.BlockNumber]
+		if !ok {
+			return fmt.Errorf("mandate event %s is in block %d, which is not part of the batch", m.Key(), m.BlockNumber)
+		}
+		kind := "granted"
+		var per, daily *string
+		var expires *int64
+		merchants := []string{}
+		if m.Revoked {
+			kind = "revoked"
+		} else {
+			p, d, e := m.PerPaymentCap.String(), m.DailyCap.String(), int64(m.ExpiresAt)
+			per, daily, expires = &p, &d, &e
+			for _, a := range m.Merchants {
+				merchants = append(merchants, addr(a))
+			}
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO mandate_events (chain_id, block_number, block_hash, block_time, tx_hash, log_index, kind, owner, agent,
+				per_payment_cap, daily_cap, expires_at, merchants)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::numeric, $11::numeric, $12, $13)
+			ON CONFLICT (chain_id, tx_hash, log_index) DO NOTHING`,
+			s.chainID, int64(m.BlockNumber), m.BlockHash.Hex(), int64(bt), m.TxHash.Hex(), int32(m.LogIndex), kind,
+			addr(m.Owner), addr(m.Agent), per, daily, expires, merchants); err != nil {
+			return fmt.Errorf("insert mandate event: %w", err)
+		}
+	}
+	return nil
 }
 
 func addr(a common.Address) string { return strings.ToLower(a.Hex()) }

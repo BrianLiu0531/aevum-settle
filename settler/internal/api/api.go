@@ -65,6 +65,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/invoices/{merchant}/{invoice}", s.invoice)
 	mux.HandleFunc("GET /v1/evidence/{block}", s.evidence)
 	mux.HandleFunc("GET /v1/events", s.events)
+	mux.HandleFunc("GET /v1/mandates", s.mandates)
 	if s.Metrics != nil {
 		mux.Handle("GET /metrics", promhttp.HandlerFor(s.Metrics, promhttp.HandlerOpts{}))
 	}

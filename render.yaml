@@ -1,0 +1,64 @@
+# Render Blueprint: settler + Postgres + demo merchant on QDay testnet.
+# New > Blueprint in the Render dashboard, pick this repo, then fill in the values marked
+# sync: false (see docs/DEPLOY.md). Free web services sleep when idle; the settler catches up
+# safely on wake, but use a paid instance for the settler if webhooks must be prompt.
+databases:
+  - name: aevum-settle-db
+    databaseName: settler
+    plan: free
+
+services:
+  - type: web
+    name: aevum-settler
+    runtime: docker
+    rootDir: settler
+    dockerfilePath: ./Dockerfile
+    plan: free
+    healthCheckPath: /healthz
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: aevum-settle-db
+          property: connectionString
+      - key: NETWORK
+        value: qday-testnet
+      - key: HTTP_ADDR
+        value: ":10000"
+      - key: ROUTER_ADDRESS
+        sync: false
+      - key: START_BLOCK
+        sync: false
+      - key: WEBHOOK_URL
+        sync: false # https://<merchant service>.onrender.com/webhooks/settle
+      - key: WEBHOOK_SECRET
+        generateValue: true
+
+  - type: web
+    name: aevum-merchant
+    runtime: docker
+    rootDir: demo
+    dockerfilePath: ./Dockerfile
+    plan: free
+    healthCheckPath: /healthz
+    envVars:
+      - key: MERCHANT_PORT
+        value: "10000"
+      - key: CHAIN_ID
+        value: "44005"
+      - key: ROUTER_ADDRESS
+        sync: false
+      - key: MERCHANT_ADDRESS
+        sync: false
+      - key: MERCHANT_PRIVATE_KEY
+        sync: false # optional: enables x402 exact settlement and refunds (needs tQDAY for gas)
+      - key: SETTLER_URL
+        sync: false # https://<settler service>.onrender.com
+      - key: MERCHANT_PUBLIC_URL
+        sync: false # https://<merchant service>.onrender.com
+      - key: WEBHOOK_SECRET
+        fromService:
+          type: web
+          name: aevum-settler
+          envVarKey: WEBHOOK_SECRET
+      - key: MERCHANT_ADMIN_TOKEN
+        generateValue: true

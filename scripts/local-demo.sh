@@ -14,7 +14,15 @@ SETTLER_PORT=${SETTLER_PORT:-8080}
 MERCHANT_PORT=${MERCHANT_PORT:-8787}
 SECRET=local-demo-webhook-secret
 PIDS=()
-cleanup() { for p in "${PIDS[@]}"; do kill "$p" 2>/dev/null || true; done; }
+cleanup() {
+  for p in "${PIDS[@]}"; do
+    # On Windows (Git Bash) kill the native process tree too; plain kill can leave it running.
+    if [ -r "/proc/$p/winpid" ] && command -v taskkill >/dev/null; then
+      taskkill //F //T //PID "$(cat "/proc/$p/winpid")" >/dev/null 2>&1 || true
+    fi
+    kill "$p" 2>/dev/null || true
+  done
+}
 trap cleanup EXIT
 
 wait_for() { # url, what
@@ -56,15 +64,21 @@ echo "› settler"
   exec "$LOGS/settler$(go env GOEXE)" >"$LOGS/settler.log" 2>&1
 ) & PIDS+=($!)
 wait_for "http://127.0.0.1:$SETTLER_PORT/healthz" settler
+sleep 1
+if grep -q "settler stopped" "$LOGS/settler.log"; then tail -3 "$LOGS/settler.log" >&2; exit 1; fi
 
 echo "› merchant"
-(ENV_FILE="$ROOT/.env.local" SETTLER_URL="http://127.0.0.1:$SETTLER_PORT" WEBHOOK_SECRET=$SECRET MERCHANT_PORT=$MERCHANT_PORT \
+(rm -f "$LOGS"/merchant.db*; ENV_FILE="$ROOT/.env.local" MERCHANT_DB="$LOGS/merchant.db" SETTLER_URL="http://127.0.0.1:$SETTLER_PORT" WEBHOOK_SECRET=$SECRET MERCHANT_PORT=$MERCHANT_PORT \
   exec node demo/merchant.js >"$LOGS/merchant.log" 2>&1) & PIDS+=($!)
 wait_for "http://127.0.0.1:$MERCHANT_PORT/healthz" merchant
 
 echo "› agent"
 status=0
 ENV_FILE="$ROOT/.env.local" MERCHANT_URL="http://127.0.0.1:$MERCHANT_PORT" node demo/agent.js scenarios || status=$?
+
+echo
+echo "› MCP server (the wallet tools an LLM agent gets), driven by a real MCP client"
+ENV_FILE="$ROOT/.env.local" MERCHANT_URL="http://127.0.0.1:$MERCHANT_PORT" node demo/test/mcp-smoke.mjs 2>/dev/null || status=$?
 
 echo
 echo "dashboard  http://localhost:$SETTLER_PORT    owner console  http://localhost:$SETTLER_PORT/console"

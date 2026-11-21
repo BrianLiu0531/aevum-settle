@@ -39,9 +39,12 @@ services:
       MERCHANT_PORT: "8787"
     ports:
       - "8787:8787"
+    volumes:
+      - merchant-data:/app/data
     depends_on:
       - settler
     restart: unless-stopped
 
 volumes:
   pgdata:
+  merchant-data:

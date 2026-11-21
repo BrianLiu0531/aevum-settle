@@ -48,6 +48,24 @@ type Payment struct {
 // After a reorg the same transaction can be re-mined in a different block, keeping this key.
 func (p Payment) Key() string { return fmt.Sprintf("%s:%d", p.TxHash.Hex(), p.LogIndex) }
 
+// MandateEvent is one decoded AgentPayRouter.MandateGranted or MandateRevoked log: the audit
+// trail of what each agent was allowed to spend, and when that ended.
+type MandateEvent struct {
+	BlockNumber   uint64
+	BlockHash     common.Hash
+	TxHash        common.Hash
+	LogIndex      uint
+	Owner         common.Address
+	Agent         common.Address
+	Revoked       bool
+	PerPaymentCap *big.Int         // granted only
+	DailyCap      *big.Int         // granted only
+	ExpiresAt     uint64           // granted only
+	Merchants     []common.Address // granted only; empty = any merchant
+}
+
+func (m MandateEvent) Key() string { return fmt.Sprintf("%s:%d", m.TxHash.Hex(), m.LogIndex) }
+
 // Evidence links a block to the L1 transactions that sequenced and verified its batch.
 type Evidence struct {
 	Batch          uint64       `json:"batch"`
@@ -65,6 +83,8 @@ type Client interface {
 	// Payments returns InvoicePaid logs of router in from..to, ordered by block and log index.
 	// A non-empty merchants list keeps only payments to those merchants.
 	Payments(ctx context.Context, router common.Address, merchants []common.Address, from, to uint64) ([]Payment, error)
+	// Mandates returns MandateGranted and MandateRevoked logs of router in from..to, in order.
+	Mandates(ctx context.Context, router common.Address, from, to uint64) ([]MandateEvent, error)
 }
 
 // ErrRangeTooLarge means the node refused a log query because the block range or result set was too big.

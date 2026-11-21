@@ -40,6 +40,8 @@
   form.row { display:flex; flex-wrap:wrap; gap:8px; } form.row input { flex: 1 1 220px; }
   pre { background: var(--bg); border:1px solid var(--line); border-radius:8px; padding: 10px; overflow:auto; font-size: 12px; margin: 10px 0 0; }
   #evidence { display:none; }
+  ul.timeline { list-style:none; margin:12px 0 0; padding:0; max-height: 220px; overflow:auto; font-size: 14px; }
+  ul.timeline li { padding: 4px 0; border-bottom: 1px dashed var(--line); }
   .grid2 { display:grid; gap:16px; grid-template-columns: 1fr; } @media (min-width: 900px) { .grid2 { grid-template-columns: 1fr 1fr; } }
 </style>
 </head>
@@ -72,6 +74,15 @@
       <tbody id="payments"><tr><td colspan="10" class="muted">No payments indexed yet.</td></tr></tbody>
     </table></div>
     <div id="evidence"><h2 style="margin-top:16px">L1 evidence for block <span id="ev-block"></span></h2><pre id="ev-body"></pre></div>
+  </section>
+
+  <section class="card">
+    <h2>Agent mandates <span class="muted" style="font-weight:400">· audit trail from MandateGranted / MandateRevoked</span></h2>
+    <div class="scroll"><table>
+      <thead><tr><th>Agent</th><th>For owner</th><th>Status</th><th class="num">Per payment</th><th class="num">Daily</th><th>Expires</th><th>Merchants</th><th class="num">Paid</th><th class="num">Spent</th></tr></thead>
+      <tbody id="mandates"><tr><td colspan="9" class="muted">No mandates granted yet.</td></tr></tbody>
+    </table></div>
+    <ul class="timeline" id="mandate-log"></ul>
   </section>
 
   <div class="grid2">
@@ -141,6 +152,23 @@ async function refresh() {
       <td>${p.confirmed ? `<span class="pill ok">yes</span>` : `<span class="pill warn">wait</span>`}</td>
       <td class="mono">${p.explorerUrl ? `<a href="${esc(p.explorerUrl)}" target="_blank" rel="noopener">${short(p.txHash)}</a>` : short(p.txHash)}<div class="muted">block ${p.blockNumber}</div></td>
       <td><button data-block="${p.blockNumber}">L1 proof</button></td></tr>`).join("");
+
+    const m = await (await fetch("/v1/mandates?limit=50")).json();
+    const cap = (a) => (a ? esc(a.display) : "–");
+    const link = (e, text) => (e.explorerUrl ? `<a href="${esc(e.explorerUrl)}" target="_blank" rel="noopener">${text}</a>` : text);
+    const pill = { active: "ok", expired: "warn", revoked: "bad" };
+    if (m.agents.length) $("mandates").innerHTML = m.agents.map((a) => `<tr>
+      <td>${addr(a.agent)}</td><td>${addr(a.owner)}</td>
+      <td><span class="pill ${pill[a.status]}">${esc(a.status)}</span></td>
+      <td class="num">${cap(a.current.perPaymentCap)}</td><td class="num">${cap(a.current.dailyCap)}</td>
+      <td>${a.current.expiresAt ? esc(new Date(a.current.expiresAt * 1000).toLocaleString()) : "–"}</td>
+      <td>${a.status === "revoked" ? "–" : a.current.merchants?.length ? a.current.merchants.map(addr).join(" ") : "any"}</td>
+      <td class="num">${a.payments}</td><td class="num">${esc(a.spent.display)}</td></tr>`).join("");
+    $("mandate-log").innerHTML = m.events.map((e) => `<li><span class="muted">${esc(ago(e.blockTime))}</span>
+      ${e.kind === "granted"
+        ? `<span class="ok">granted</span> ${addr(e.agent)} ${cap(e.perPaymentCap)} per payment, ${cap(e.dailyCap)} per day`
+        : `<span class="bad">revoked</span> ${addr(e.agent)}`}
+      by ${addr(e.owner)} · ${link(e, "tx")} <span class="muted">(${esc(e.assurance)})</span></li>`).join("");
 
     const { events } = await (await fetch("/v1/events?limit=20")).json();
     if (events.length) $("events").innerHTML = events.map((e) => `<tr>

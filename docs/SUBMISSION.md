@@ -25,7 +25,16 @@ either too slow for pay-per-call or too risky for large orders, and most payment
   block as evidence, a live dashboard and an owner console.
 - **Agent SDK + CLI** (JS): a 402-aware `fetch` that checks the invoice against the mandate,
   simulates, pays, and waits for the merchant; every refusal is a machine-readable code.
-- **Demo merchant**: a paid API answering HTTP 402, releasing data only on the settler's word.
+- **x402 v2**: every invoice offers the standard `exact` scheme (the payer signs an EIP-3009
+  authorization, which tUSD8 supports natively, and pays no gas) and our `aevum-mandate` scheme for
+  agents under a mandate. The router's `settleAuthorization` records both as invoice payments.
+- **AI agent**: Claude (Messages API tool runner) plans and buys with the wallet tools, adapting to
+  refusal codes; an MCP server gives the same tools to Claude Code / Desktop or any MCP client. The
+  mandate bounds the model, whatever it is told.
+- **Mandate audit trail**: grants and revokes are indexed reorg-safely; `/v1/mandates` and the
+  dashboard show each agent's status, limits and spend.
+- **Demo merchant**: x402 paid API with SQLite records, releasing data only on the settler's word,
+  withdrawing it on reorg, and refunding under-, over- and late payments automatically.
 
 ## Aevum integration evidence
 
@@ -33,6 +42,7 @@ either too slow for pay-per-call or too risky for large orders, and most payment
 - Deploy tx: https://explorer-test.qday.info/tx/<hash>
 - Agent payments (trusted / virtual / verified tiers): <tx links>
 - Mandate grant / revoke: <tx links>
+- x402 exact payment (gasless for the payer) and an automatic refund: <tx links>
 - tUSD8: `0x456569838f1d43009A91ebA4263147Afd7233483`, chain ID 44005
 
 ## How to run
@@ -45,13 +55,13 @@ steps (deploy, fund, grant, `docker compose --profile demo up`).
 | Criterion | Where |
 |---|---|
 | UX | owner console, dashboard with tier bars and L1 proof, merchant page, CLI output |
-| Demo | `node agent.js scenarios`: 10 scenarios with tx hashes and explorer links |
+| Demo | `node agent.js scenarios`: 12 scenarios with tx hashes and explorer links; `node ai-agent.js` with Claude |
 | Docs | README: diagrams, env vars, API, webhooks, SDK, testnet addresses |
-| Innovation / agentic | assurance-by-amount for agent commerce; HTTP 402 flow; refusal codes for agents |
-| Platform integration | zkEVM virtual/verified batches and L1 evidence; mandates as session-key-style limits |
+| Innovation / agentic | assurance-by-amount for agent commerce; x402 with a mandate scheme; Claude agent + MCP server; refusal codes the model reasons about |
+| Platform integration | zkEVM virtual/verified batches and L1 evidence; tUSD8's native EIP-3009 for gasless x402; mandates as session-key-style limits; verified QDay EntryPoint/bundler for the 4337 roadmap |
 | Resilience / tests | reorg-safe indexer, randomised simulation, outbox, CI end to end |
 | Real-world utility | pay-per-call APIs and higher-value orders with the same rails |
-| Safety | caps, expiry, allowlist, revoke, once-only invoices, signed webhooks, on-chain audit trail |
+| Safety | caps, expiry, allowlist, revoke, once-only invoices, human approval gate, tools without free-form URLs, signed webhooks, indexed audit trail, refunds |
 | Ecosystem / open source | MIT, Docker Compose, reusable SDK and webhook verifier |
 
 ## Team

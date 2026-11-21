@@ -16,6 +16,12 @@ const Decimals = 6
 // InvoicePaidTopic is the AgentPayRouter InvoicePaid event signature.
 var InvoicePaidTopic = crypto.Keccak256Hash([]byte("InvoicePaid(bytes32,address,address,address,uint256)"))
 
+// MandateGrantedTopic and MandateRevokedTopic are the router's mandate audit events.
+var (
+	MandateGrantedTopic = crypto.Keccak256Hash([]byte("MandateGranted(address,address,uint128,uint128,uint64,address[])"))
+	MandateRevokedTopic = crypto.Keccak256Hash([]byte("MandateRevoked(address,address)"))
+)
+
 // Network describes a chain the settler can follow.
 type Network struct {
 	Name     string

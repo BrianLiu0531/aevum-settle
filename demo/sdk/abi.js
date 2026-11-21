@@ -8,6 +8,7 @@ export const ROUTER_ABI = [
   "function revokeMandate(address agent)",
   "function pay(bytes32 invoiceId, address merchant, uint256 amount)",
   "function payAsAgent(address owner, bytes32 invoiceId, address merchant, uint256 amount)",
+  "function settleAuthorization(bytes32 invoiceId, address from, uint256 value, uint256 validAfter, uint256 validBefore, bytes32 nonce, uint8 v, bytes32 r, bytes32 s)",
   "event MandateGranted(address indexed owner, address indexed agent, uint128 perPaymentCap, uint128 dailyCap, uint64 expiresAt, address[] merchants)",
   "event MandateRevoked(address indexed owner, address indexed agent)",
   "event InvoicePaid(bytes32 indexed invoiceId, address indexed merchant, address indexed payer, address agent, uint256 amount)",
@@ -26,6 +27,8 @@ export const TOKEN_ABI = [
   "function balanceOf(address) view returns (uint256)",
   "function allowance(address owner, address spender) view returns (uint256)",
   "function approve(address spender, uint256 amount) returns (bool)",
+  "function transfer(address to, uint256 amount) returns (bool)",
+  "function authorizationState(address authorizer, bytes32 nonce) view returns (bool)",
   "function symbol() view returns (string)",
   "function decimals() view returns (uint8)",
 ];

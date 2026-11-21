@@ -51,6 +51,7 @@ async function main() {
     OWNER_ADDRESS: owner.address,
     OWNER_PRIVATE_KEY: keys[0],
     MERCHANT_ADDRESS: merchant.address,
+    MERCHANT_PRIVATE_KEY: keys[1],
     AGENT_PRIVATE_KEY: keys[2],
     LOCAL_VIRTUAL_DEPTH: "10",
     LOCAL_VERIFIED_DEPTH: "30",
