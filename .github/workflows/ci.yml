@@ -86,4 +86,4 @@ jobs:
           cache-dependency-path: settler/go.sum
       - run: scripts/local-demo.sh
       - if: failure()
-        run: tail -n 100 .demo/*.log
+        run: tail -n 100 .demo/*.log || true
